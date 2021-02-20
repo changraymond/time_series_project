@@ -1,0 +1,268 @@
+---
+title: "Modeling Gewgle's Stock Price"
+author: Raymond Chang
+output: pdf_document
+---
+Assignment: Gewgle Incorporated, a fictional search engine company, has been struggling for a few years as the company faces a multitude of challenges. From high-level scandals to an increase in competition, Gewgle hopes to turn things around and begin Q4 on a good note. Given their stock prices from January 2015 to September 2019, forecast Gewgle's stock prices for the first 10 trading days of October 2019.
+
+# 1 Exploratory Data Analysis
+## 1.1 First Glance Observations
+```{r,  message = F, warning = F, echo = F}
+# load packages
+library(forecast)
+library(astsa)
+
+#load data
+stocks = read.csv("stocks.csv")
+stocks$Date = strptime(stocks$Date, "%Y-%m-%d")
+
+# plot stock prices
+plot(x = stocks$Date, y = stocks$Price, type = "l", xlab = "Date", ylab = "Gewgle Inc. Stock Price", main = "Figure 1: Gewgle Inc. Stock Price")
+```
+After plotting Gewgle's stock prices, I noticed 3 unique features about the dataset:
+
+1. There is a overall downwards trend.
+2. The variance or "spread" is decreasing year after year.
+3. There are seasonal spikes occuring around the middle of each year.
+
+## 1.2 Modeling
+I will be using both ARIMA (Autoregressive Integrated Moving Average) and SARIMA (Seasonal Autoregressive Integrated Moving Average) models for this project.
+
+### 1.2.1 ARIMA Model: denoted as ARIMA(p,d,q)
+The components of ARIMA are:
+
+**AR**: Autoregression - a model that uses the dependent relationship between an observation and some number of lagged observations
+
+**I**: Integrated - the use of differencing of individual observations (such as subtracting an observation from an observation at the previous time step) in order to make the time series stationary
+
+**MA**: Moving Average - a model that uses the dependency between an observation and a residual error from a moving average model applied to lagged observations
+
+The parameters of the ARIMA model are:
+
+**p**: the number of lag observations included in the model
+
+**d**: the number of times that individual observations are differenced
+
+**q**: the size of the moving average "window" 
+
+### 1.2.2 SARIMA Model: denoted as SARIMA(p,d,q) x (P,D,Q)s
+
+The components of SARIMA is the same as ARIMA with the addition of:
+
+**S**: Seasonal - seasonal component used to model univariate data
+
+The parameters of SARIMA is the same as ARIMA with the addition of:
+
+**P**: the *seasonal* number of lag observations included in the model
+
+**D**: the *seasonal* number of times that individual observations are differenced
+
+**Q**: the *seasonal* size of the moving average "window" 
+
+# 2 Modeling a Deterministic Function of Time
+## 2.1 Detrending
+```{r,  message = F, warning = F, echo = F}
+# differenced stock prices
+diffed = diff(stocks$Price)
+
+#plot of differenced stock prices
+plot(x = 1:length(diffed), y = diffed, type = "l", xlab = "Time", ylab = "Difference of Stock Price", main = "Figure 2: Differenced Stock Prices")
+```
+As part of the I in ARIMA, I will take the difference of the time series to remove the downwards trend. The differenced stock prices show heteroscedasticity (a fluctuation of variance or spread of the data over time) centered at mean zero. This indicates that a variance stabilizing transform should be applied to the time series to achieve homoscedasticity (constant variance over time) and stationarity (consistent mean, variance, and covariance over time).
+
+## 2.2 Variance Stabilizing Transformation
+```{r,  message = F, warning = F, echo = F}
+#log of stock prices
+log.stocks = log(stocks$Price)
+
+# diff of log of stock prices
+diffed.log = diff(log.stocks)
+
+# plot of diff of log data
+plot(x = 1:length(diffed), y = diffed.log, type = "l", xlab = "Time", ylab = "Difference of Transformed
+Stock Price", main = "Figure 3: Difference of Log of Stock Prices")
+```
+To stabilize the heteroscedasticity from the differenced data, I applied a log transformation because they are effective at removing exponential variance.  
+*Note: The seasonality component will be accounted for in the SARIMA model.*
+
+# 3 ARIMA Model Selection
+## 3.1 ACF & PACF
+To determine possible candidate models, I will plot the autocorrelation function (ACF) and partial autocorrelation function (PACF) of the differenced logged data. 
+
+The ACF is a measure of the correlation between observations that are separated by k time units. The PACF is a measure of the correlation between observations that are separated by k time units after adjusting for the presence of all the other terms of shorter lag. Here is a table showing the rule of thumb for choosing p and q values from ACF and PACF plots.
+
+Model       ACF                    PACF
+-----       ---                    ----
+AR(p)       Tails off slowly       Cuts off after lag p
+MA(q)       Cuts off after lag q   Tails off slowly
+ARMA(p, q)  Tails off slowly       Tails off slowly
+  
+```{r,  message = F, warning = F, echo = F, results='hide'}
+# ACF and PACF of differenced data
+acf2(diffed.log, main = "Figure 4: ACF and PACF of Differenced Transformed Data")
+```
+
+\texttt{acf2} shows that the ACF is tailing off slowly. The PACF cuts off after lag p=1 which indicates that an AR(1) model might be feasible for this dataset.
+
+## 3.2 Generating Models
+
+Another approach is to use \texttt{auto.arima} which gives us more precise candidates for p, d, and q.
+```{r,  message = F, warning = F, echo = F, results = 'hide'}
+# use auto.arima to look at p, d, q candidates
+auto.arima(log.stocks)
+```
+From \texttt{auto.arima}, we get values of p = 1, d = 1, and q = 0. 
+
+\texttt{sarima} calculates the Akaike information criterion (AIC), Bayesian information criterion (BIC), and AICc which are all Information Criterion (IC). IC judges out-of-sample prediction errors. It also quantifies the quality of a statistical model by taking into account how well the model fits the dataset and penalizes the model based on its complexity. 
+
+A model is considered better if it has a lower information criteria than another model. AIC penalizes complex models less which indicates that it may put more emphasis on model performance on the training dataset. This in turn makes AIC prone to selecting more complex models. BIC penalizes model complexity more heavily. AICc is similar to AIC with an extra penality term added for the number of parameters in the model. 
+```{r,  message = F, warning = F, echo = F, include = F}
+# fit SARIMA(1, 1, 0) accounting for yearly seasonality
+model.1 = sarima(log.stocks, 1, 1, 0)
+
+AIC = c(); BIC = c(); AICc = c()
+AIC = c(AIC, model.1$AIC); BIC = c(BIC, model.1$BIC); AICc = c(AICc, model.1$AICc)
+```
+
+```{r,  message = F, warning = F, echo = F, include = F}
+# other candidate models: ARIMA(1, 1, 1), AR(2), ARIMA(1, 1, 1)x(1, 0, 0)[3], ARIMA(1, 1,2)x(1, 1, 0)[6]
+
+# ARIMA(1, 1, 1) added to check for a possible MA component
+model.2 = sarima(log.stocks, 1, 1, 1)
+AIC = c(AIC, model.2$AIC); BIC = c(BIC, model.2$BIC); AICc = c(AICc, model.2$AICc)
+
+# ARIMA(2, 0, 0) added because of ACF and PACF plots, no differencing
+model.3 = sarima(log.stocks, 2, 0, 0)
+AIC = c(AIC, model.3$AIC); BIC = c(BIC, model.3$BIC); AICc = c(AICc, model.3$AICc)
+
+# seasonality component accounting for quarterly seasonality
+model.4 = sarima(log.stocks, 1, 1, 1, 1, 0, 0, S = 3)
+AIC = c(AIC, model.4$AIC); BIC = c(BIC, model.4$BIC); AICc = c(AICc, model.4$AICc)
+
+# seasonality component accounting for biannual seasonality
+model.5 = sarima(log.stocks, 1, 1, 2, 1, 1, 0, S = 6)
+AIC = c(AIC, model.5$AIC); BIC = c(BIC, model.5$BIC); AICc = c(AICc, model.5$AICc)
+```
+All of the models are created using the logged data, and all except Model 3 are differenced once. Models 1, 4, and 5 have a seasonality component of period 12, 3, and 4 respectively. s = 12 accounts for yearly seasonality, s = 3 accounts for quarterly seasonality, and s = 4 accounts for seasonality for each third of the year.
+
+## 3.3 Cross Validation Model Comparison
+```{r,  message = F, warning = F, echo = F}
+# compare IC values of the 5 models
+df_ic = data.frame(model=1:5, AIC=AIC, BIC=BIC, AICc=AICc)
+
+```
+The AIC, BIC, and AICc values for the 5 models are:
+
+Model      Notation                                    AIC             BIC             AICc
+-----      ----------                                  ---             ---             ----
+1          ARIMA(1,1,0)                                -6.140505       -6.127720       -6.140496
+2          ARIMA(1,1,1)                                -6.138829       -6.121782       -6.138812
+3          AR(2)                                       -6.131122       -6.114086       -6.131105	
+4          SARIMA(1,1,1) x (1,0,0)$$_3$$               -6.138162       -6.116853	    -6.138133
+5          SARIMA(1,1,2) x (1,1,0)$$_6$$               -5.689036	     -5.667731       -5.689008
+
+\begin{center} Table 1: AIC, BIC, AICc of the 5 models. \end{center}
+
+Because the Information Criteria for these 5 models are very close in value, another metric, mean squared error (MSE), will be used to pick the best model. MSE measures the deviation between the fitted values with the actual time series.
+
+```{r,  message = F, warning = F, echo = F, include = F}
+sum_squared_errors = c(model.1 = 0, model.2 = 0, model.3 = 0, model.4 = 0, model.5 = 0)
+for (i in 1000:(length(log.stocks)-12)) {
+  train_set = log.stocks[1:i]
+  test_set = log.stocks[i:i+12]
+  forecast1 = sarima.for(train_set, n.ahead = 12, 1, 1, 0, 0, 0, 0, 12)$pred
+  forecast2 = sarima.for(train_set, n.ahead = 12, 1, 1, 1)$pred
+  forecast3 = sarima.for(train_set, n.ahead = 12, 2, 0, 0)$pred
+  forecast4 = sarima.for(train_set, n.ahead = 12, 1, 1, 1, 1, 0, 0, 3)$pred
+  forecast5 = sarima.for(train_set, n.ahead = 12, 1, 1, 2, 1, 1, 0, 6)$pred
+  sum_squared_errors[1] = sum_squared_errors[1] + sum((forecast1 - test_set)^2)
+  sum_squared_errors[2] = sum_squared_errors[2] + sum((forecast2 - test_set)^2)
+  sum_squared_errors[3] = sum_squared_errors[3] + sum((forecast3 - test_set)^2)
+  sum_squared_errors[4] = sum_squared_errors[4] + sum((forecast4 - test_set)^2)
+  sum_squared_errors[5] = sum_squared_errors[5] + sum((forecast5 - test_set)^2)
+}
+
+df_mse = data.frame(sum_squared_errors)
+```
+Model      Notation                          MSE
+-----      ---------                         ---
+1          ARIMA(1,1,0)                      3.352261
+2          ARIMA(1,1,1)                      3.352281	
+3          AR(2)                             3.423817	
+4          SARIMA(1,1,1) x (1,0,0)$$_3$$     3.349121	
+5          SARIMA(1,1,2) x (1,1,0)$$_6$$     3.945073
+
+\begin{center} Table 2: Out-of-sample MSE’s for our models of interest. \end{center}
+
+Model 4 will be used to predict the stock prices of Gewgle Inc.'s next 10 trading days because it has the lowest MSE out of the 5 models.
+
+# 4 Results
+
+The ARIMA model chosen for prediction is a SARIMA(1,1,1) x (1,0,0)$_3$ model, defined as:
+
+\begin{equation}
+(1 - \Phi B^3) (1 - \phi B) \nabla X_t = (1 - \theta B) Z_t
+\end{equation}
+
+## 4.1  Estimation of Model Parameters
+
+The estimates of the model parameters from \texttt{sarima} are:
+
+Parameter           Estimate
+---------           --------
+$$\Phi$$            0.0013
+$$\phi$$            -0.004
+$$\theta$$          -0.0031
+
+\begin{center} Table 3: Model parameter estimates corresponding to variables in equation (1). \end{center}
+
+```{r,  message = F, warning = F, echo = F, include = F}
+# estimate model parameters from model 4
+sarima(log.stocks, p=1, d=1, q=1, P=1, D=0, Q=0, S=12)$ttable
+# We get: ar1 = -0.0040, ma1 = -0.0031, sar1 = 0.0013 from the sarima function.
+```
+
+## 4.2 Final Prediction
+
+```{r, message = F, include = F, warning = F, echo = F}
+# predict next 10 days
+log.of.pred = sarima.for(log.stocks, 1, 1, 0, S = 12, n.ahead = 10)$pred
+```
+
+```{r, message = F, error = F, warning = F, echo = F}
+predictions = sapply(log.of.pred, exp)
+
+# predictions
+write.csv(predictions, "predictions.csv", row.names = FALSE, col.names = FALSE)
+
+plot(x = 1:length(stocks$Price), 
+     y = stocks$Price, 
+     type = "l", 
+     xlab = "Time (from December 2018)",
+     ylab = "Gewgle Inc. Stock Price", 
+     main = "Figure 5: Plot of Predicted Prices in Red", 
+     xlim = c(1000, 1205), 
+     ylim = c(19, 25))
+points(x = (length(stocks$Price)+1):(length(stocks$Price)+10), 
+       y = predictions, 
+       col = "red")
+```
+
+Day       Stock Price
+---       -----------
+1         20.46552
+2         20.45448
+3         20.44343
+4         20.43238
+5         20.42134
+6         20.41030
+7         20.39927
+8         20.38824
+9         20.37723
+10        20.36621
+
+\begin{center}   Table 4: Next 10 days of stock prices projected using \texttt{sarima.for}.   \end{center}
+
+## 4.3 Conclusion
+The stock price data for Gewgle Inc. shows a downward trend with a seasonal component and heteroscedasticity. After applying a variance-stabilizing transformation and pursuing stationarity, I decided upon a SARIMA(1,1,1) x (1,0,0)$_3$ model. My prediction shows a decline of about $0.10 in stock price over the first 10 days of October, indicating that the stock is not turning around as Gewgle hoped it would.
+
