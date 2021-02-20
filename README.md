@@ -1,2 +1,2 @@
 # time_series_project
-Time series analysis project
+Final report published as pdf.
